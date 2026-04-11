@@ -1,6 +1,5 @@
 """
 main.py — Backend Registro Nacional de Prótesis
-https://registro.icarticular.cl (API)
 """
 
 import os
@@ -11,7 +10,28 @@ from pathlib import Path
 # ============================================================
 # INICIALIZACIÓN DE DIRECTORIOS
 # ============================================================
-DATA_PATH = Path(os.getenv("DATA_PATH", "/data"))
+
+def _resolve_data_path() -> Path:
+    """
+    Intenta usar /data (disco Render).
+    Fallback a ./data local si no hay permisos.
+    """
+    candidate = Path(os.getenv("DATA_PATH", "/data"))
+    try:
+        candidate.mkdir(parents=True, exist_ok=True)
+        # Verificar escritura
+        test = candidate / ".write_test"
+        test.touch()
+        test.unlink()
+        return candidate
+    except PermissionError:
+        fallback = Path("./data")
+        fallback.mkdir(parents=True, exist_ok=True)
+        print(f"⚠️  /data sin permisos → usando {fallback.resolve()}")
+        return fallback
+
+DATA_PATH = _resolve_data_path()
+os.environ["DATA_PATH"] = str(DATA_PATH)
 
 def init_dirs():
     dirs = [
@@ -20,7 +40,7 @@ def init_dirs():
     ]
     for d in dirs:
         d.mkdir(parents=True, exist_ok=True)
-    print("✅ Directorios de registro inicializados")
+    print(f"✅ Directorios inicializados en {DATA_PATH}")
 
 init_dirs()
 
@@ -44,7 +64,6 @@ from routers.registro_escalas import router as escalas_router
 app = FastAPI(
     title="Registro Nacional de Prótesis — ICA",
     version="1.0",
-    description="API para el registro de pacientes operados de prótesis articulares en Chile.",
 )
 
 # ============================================================
@@ -78,6 +97,6 @@ def root():
         "status":  "ok",
         "service": "Registro Nacional de Prótesis",
         "version": "1.0",
-        "modules": ["auth", "admin", "cirugia", "escalas"],
+        "data_path": str(DATA_PATH),
     }
-  
+    
