@@ -1,13 +1,4 @@
 # routers/registro_auth.py
-#
-# Auth para registro de prótesis.
-# Flujo:
-#   1. Admin genera código para un RUT  → POST /api/registro/auth/generar
-#   2. Paciente valida RUT + código     → POST /api/registro/auth/validar
-#   3. Recibe token JWT de sesión
-#   4. Usa token en headers para el resto de endpoints
-#
-# Tokens de acceso: un solo uso + expiran en 365 días
 
 from __future__ import annotations
 
@@ -25,17 +16,14 @@ from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/registro/auth", tags=["registro-auth"])
 
-# ============================================================
-# CONFIG
-# ============================================================
 DATA_PATH   = Path(os.getenv("DATA_PATH", "/data"))
 CODES_FILE  = DATA_PATH / "registro_protesis" / "access_codes.json"
 JWT_SECRET  = os.getenv("REGISTRO_JWT_SECRET", "cambiar_en_produccion_registro_ica")
 JWT_ALGO    = "HS256"
 JWT_EXPIRE_DAYS = 365
-CODE_LENGTH = 8   # ej: "A3X9K2M7"
+CODE_LENGTH = 8
 
-ADMIN_KEY   = os.getenv("REGISTRO_ADMIN_KEY", "admin_registro_ica")  # para generar códigos
+ADMIN_KEY   = os.getenv("REGISTRO_ADMIN_KEY", "admin_registro_ica")
 
 
 # ============================================================
@@ -60,10 +48,7 @@ def _load_codes() -> dict:
 
 def _save_codes(data: dict) -> None:
     CODES_FILE.parent.mkdir(parents=True, exist_ok=True)
-    CODES_FILE.write_text(
-        json.dumps(data, indent=2, ensure_ascii=False),
-        encoding="utf-8"
-    )
+    CODES_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def _generate_code() -> str:
@@ -81,7 +66,6 @@ def _create_token(rut: str) -> str:
 
 
 def _decode_token(token: str) -> str:
-    """Retorna rut si el token es válido. Lanza HTTPException si no."""
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGO])
         return payload["sub"]
@@ -91,16 +75,9 @@ def _decode_token(token: str) -> str:
         raise HTTPException(status_code=401, detail="Token inválido")
 
 
-# ============================================================
-# DEPENDENCIA REUTILIZABLE
-# ============================================================
 def get_rut_from_token(
     authorization: str | None = Header(default=None)
 ) -> str:
-    """
-    Extrae y valida el RUT desde el header Authorization: Bearer <token>.
-    Usar como dependencia en otros routers.
-    """
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Token requerido")
     token = authorization.removeprefix("Bearer ").strip()
@@ -110,10 +87,14 @@ def get_rut_from_token(
 # ============================================================
 # SCHEMAS
 # ============================================================
+class IngresarRequest(BaseModel):
+    rut: str
+
+
 class GenerarCodigoRequest(BaseModel):
     rut:       str
     admin_key: str
-    nota:      str = ""   # opcional — ej: "enviado por Fonasa batch abril 2026"
+    nota:      str = ""
 
 
 class ValidarCodigoRequest(BaseModel):
@@ -125,12 +106,33 @@ class ValidarCodigoRequest(BaseModel):
 # ENDPOINTS
 # ============================================================
 
+@router.post("/ingresar")
+def ingresar(payload: IngresarRequest):
+    """
+    Paciente ingresa solo con su RUT — sin código.
+    Genera token JWT directamente.
+    Primera etapa: acceso abierto para registro inicial.
+    """
+    rut = _normalize_rut(payload.rut)
+    if not _valid_rut(rut):
+        raise HTTPException(status_code=400, detail="RUT inválido. Formato esperado: 12345678-9")
+
+    token = _create_token(rut)
+    return {"ok": True, "rut": rut, "token": token}
+
+
+@router.get("/verificar")
+def verificar_token(
+    authorization: str | None = Header(default=None)
+):
+    """Verifica que el token sea válido."""
+    rut = get_rut_from_token(authorization)
+    return {"ok": True, "rut": rut}
+
+
 @router.post("/generar")
 def generar_codigo(payload: GenerarCodigoRequest):
-    """
-    Admin genera un código de acceso para un RUT.
-    Puede llamarse en batch para envíos masivos de Fonasa.
-    """
+    """Admin genera un código de acceso para un RUT."""
     if payload.admin_key != ADMIN_KEY:
         raise HTTPException(status_code=403, detail="Clave de admin inválida")
 
@@ -138,17 +140,10 @@ def generar_codigo(payload: GenerarCodigoRequest):
     if not _valid_rut(rut):
         raise HTTPException(status_code=400, detail="RUT inválido")
 
-    codes = _load_codes()
-
-    # Si ya tiene código activo y no usado → devolver el mismo
+    codes    = _load_codes()
     existing = codes.get(rut)
     if existing and not existing.get("used"):
-        return {
-            "ok":     True,
-            "rut":    rut,
-            "codigo": existing["codigo"],
-            "nuevo":  False,
-        }
+        return {"ok": True, "rut": rut, "codigo": existing["codigo"], "nuevo": False}
 
     code = _generate_code()
     codes[rut] = {
@@ -159,23 +154,12 @@ def generar_codigo(payload: GenerarCodigoRequest):
         "nota":       payload.nota,
     }
     _save_codes(codes)
-
-    return {
-        "ok":     True,
-        "rut":    rut,
-        "codigo": code,
-        "nuevo":  True,
-    }
+    return {"ok": True, "rut": rut, "codigo": code, "nuevo": True}
 
 
 @router.post("/validar")
 def validar_codigo(payload: ValidarCodigoRequest):
-    """
-    Paciente valida RUT + código.
-    Si es correcto → devuelve token JWT de sesión.
-    El código queda marcado como usado pero el token dura 365 días
-    (paciente puede volver a completar escalas sin nuevo código).
-    """
+    """Paciente valida RUT + código → devuelve token JWT."""
     rut = _normalize_rut(payload.rut)
     if not _valid_rut(rut):
         raise HTTPException(status_code=400, detail="RUT inválido")
@@ -184,12 +168,10 @@ def validar_codigo(payload: ValidarCodigoRequest):
     entry = codes.get(rut)
 
     if not entry:
-        raise HTTPException(status_code=404, detail="RUT no registrado. Contacte a su centro médico.")
-
+        raise HTTPException(status_code=404, detail="RUT no registrado.")
     if entry["codigo"].upper() != payload.codigo.strip().upper():
         raise HTTPException(status_code=401, detail="Código incorrecto")
 
-    # Marcar como usado si es primera vez
     if not entry.get("used"):
         entry["used"]    = True
         entry["used_at"] = datetime.now(timezone.utc).isoformat()
@@ -197,39 +179,14 @@ def validar_codigo(payload: ValidarCodigoRequest):
         _save_codes(codes)
 
     token = _create_token(rut)
-
-    return {
-        "ok":    True,
-        "rut":   rut,
-        "token": token,
-    }
-
-
-@router.get("/verificar")
-def verificar_token(
-    authorization: str | None = Header(default=None)
-):
-    """
-    Verifica que el token sea válido.
-    El frontend puede llamar esto al montar la app para saber si
-    el paciente ya tiene sesión activa.
-    """
-    rut = get_rut_from_token(authorization)
-    return {"ok": True, "rut": rut}
+    return {"ok": True, "rut": rut, "token": token}
 
 
 @router.post("/generar-batch")
-def generar_batch(
-    payload: list[GenerarCodigoRequest],
-):
-    """
-    Genera códigos para múltiples RUTs en una sola llamada.
-    Útil para envíos masivos de Fonasa.
-    """
+def generar_batch(payload: list[GenerarCodigoRequest]):
+    """Genera códigos para múltiples RUTs — para envíos masivos de Fonasa."""
     if not payload:
         raise HTTPException(status_code=400, detail="Lista vacía")
-
-    # Validar admin_key en el primer elemento
     if payload[0].admin_key != ADMIN_KEY:
         raise HTTPException(status_code=403, detail="Clave de admin inválida")
 
@@ -241,12 +198,10 @@ def generar_batch(
         if not _valid_rut(rut):
             results.append({"rut": rut, "ok": False, "error": "RUT inválido"})
             continue
-
         existing = codes.get(rut)
         if existing and not existing.get("used"):
             results.append({"rut": rut, "ok": True, "codigo": existing["codigo"], "nuevo": False})
             continue
-
         code = _generate_code()
         codes[rut] = {
             "codigo":     code,
@@ -259,3 +214,4 @@ def generar_batch(
 
     _save_codes(codes)
     return {"ok": True, "total": len(results), "results": results}
+    
