@@ -1,13 +1,3 @@
-# routers/registro_cirugia.py
-#
-# Registro de cirugía e implante de prótesis.
-# El paciente registra su propia cirugía usando su token JWT.
-#
-# Estructura en disco:
-#   /data/registro_protesis/patients/{rut}/
-#       surgeries/{id}.json   ← datos de la cirugía
-#       implants/{id}.json    ← datos del implante
-
 from __future__ import annotations
 
 import json
@@ -24,9 +14,6 @@ from routers.registro_auth import get_rut_from_token
 
 router = APIRouter(prefix="/api/registro/cirugia", tags=["registro-cirugia"])
 
-# ============================================================
-# CONFIG
-# ============================================================
 DATA_PATH    = Path(os.getenv("DATA_PATH", "/data"))
 PATIENTS_DIR = DATA_PATH / "registro_protesis" / "patients"
 
@@ -38,14 +25,9 @@ TIPOS_PROTESIS = [
     "Cadera parcial (hemiartroplastía)",
     "Rodilla total",
     "Rodilla unicompartimental",
-    "Hombro total",
-    "Hombro reverso",
-    "Tobillo total",
-    "Codo total",
-    "Otra",
 ]
 
-LADOS = ["Derecho", "Izquierdo", "Bilateral"]
+LADOS = ["Derecho", "Izquierdo"]
 
 ABORDAJES_CADERA = [
     "Posterior",
@@ -56,11 +38,19 @@ ABORDAJES_CADERA = [
     "Otro",
 ]
 
-FIJACIONES = [
-    "Cementada",
+FIJACIONES_CADERA = [
     "No cementada",
-    "Híbrida (vástago cementado, cúpula no cementada)",
-    "Híbrida inversa",
+    "Cementada",
+    "Híbrida (vástago cementado, cotilo no cementado)",
+    "Híbrida inversa (cotilo cementado, vástago no cementado)",
+]
+
+ALINEACIONES_RODILLA = [
+    "Mechanical Alignment",
+    "Kinematic Alignment",
+    "Inverse Kinematic Alignment",
+    "Restricted Alignment",
+    "Functional Positioning",
 ]
 
 INDICACIONES = [
@@ -74,23 +64,33 @@ INDICACIONES = [
     "Otra",
 ]
 
-PREVISIONES = ["Fonasa A", "Fonasa B", "Fonasa C", "Fonasa D", "Isapre", "Particular", "Otra"]
+PREVISIONES = ["Fonasa", "Isapre", "Particular", "Otra"]
+
+MARCAS = {
+    "cadera": [
+        {"id": "stryker", "label": "Stryker",        "cotilo": "Trident",   "vastago": "Accolade II"},
+        {"id": "depuy",   "label": "DePuy Synthes",  "cotilo": "Pinnacle",  "vastago": "Corail"},
+        {"id": "zimmer",  "label": "Zimmer Biomet",  "cotilo": "G7",        "vastago": "Taperloc"},
+        {"id": "smith",   "label": "Smith & Nephew", "cotilo": "R3",        "vastago": "Anthology"},
+    ],
+    "rodilla": [
+        {"id": "stryker", "label": "Stryker",        "modelo": "Triathlon"},
+        {"id": "depuy",   "label": "DePuy Synthes",  "modelo": "Attune"},
+        {"id": "zimmer",  "label": "Zimmer Biomet",  "modelo": "Persona"},
+        {"id": "smith",   "label": "Smith & Nephew", "modelo": "Genesis II"},
+    ],
+}
+
+ROBOTICA = ["Sin robótica", "Mako (Stryker)", "ROSA (Zimmer Biomet)"]
 
 # ============================================================
 # HELPERS
 # ============================================================
-def _patient_dir(rut: str) -> Path:
-    return PATIENTS_DIR / rut
-
 def _surgeries_dir(rut: str) -> Path:
-    return _patient_dir(rut) / "surgeries"
-
-def _implants_dir(rut: str) -> Path:
-    return _patient_dir(rut) / "implants"
+    return PATIENTS_DIR / rut / "surgeries"
 
 def _ensure_dirs(rut: str) -> None:
-    for d in [_surgeries_dir(rut), _implants_dir(rut)]:
-        d.mkdir(parents=True, exist_ok=True)
+    _surgeries_dir(rut).mkdir(parents=True, exist_ok=True)
 
 def _read_json(path: Path) -> dict:
     try:
@@ -120,31 +120,36 @@ def _list_surgeries(rut: str) -> list:
 # SCHEMAS
 # ============================================================
 class CirugiaPayload(BaseModel):
-    # Datos de la cirugía
-    fecha_cirugia:    str              # YYYY-MM-DD
+    fecha_cirugia:    str
     tipo_protesis:    str
     lado:             str
     indicacion:       str
-    abordaje:         Optional[str] = ""
 
-    # Implante
-    marca_implante:   Optional[str] = ""
-    modelo_implante:  Optional[str] = ""
-    fijacion:         Optional[str] = ""
-    numero_serie:     Optional[str] = ""
+    # Lugar
+    nombre_clinica:   str
+    ciudad_clinica:   str
+    region_clinica:   Optional[str] = ""
 
     # Cirujano
     nombre_cirujano:  str
     rut_cirujano:     Optional[str] = ""
-    especialidad_cirujano: Optional[str] = "Traumatología"
 
-    # Clínica / hospital
-    nombre_clinica:   str
-    ciudad_clinica:   str
-    region_clinica:   Optional[str] = ""
-    prevision:        Optional[str] = ""
+    # Implante común
+    marca_implante:   Optional[str] = ""
+    fijacion:         Optional[str] = ""   # cadera
+    alineacion:       Optional[str] = ""   # rodilla
+    robotica:         Optional[str] = ""
+
+    # Cadera
+    cotilo:           Optional[str] = ""
+    vastago:          Optional[str] = ""
+    abordaje:         Optional[str] = ""
+
+    # Rodilla
+    modelo_implante:  Optional[str] = ""
 
     # Extra
+    prevision:        Optional[str] = ""
     notas:            Optional[str] = ""
 
 
@@ -153,19 +158,19 @@ class CirugiaUpdatePayload(BaseModel):
     tipo_protesis:    Optional[str] = None
     lado:             Optional[str] = None
     indicacion:       Optional[str] = None
-    abordaje:         Optional[str] = None
-    marca_implante:   Optional[str] = None
-    modelo_implante:  Optional[str] = None
-    fijacion:         Optional[str] = None
-    numero_serie:     Optional[str] = None
-    nombre_cirujano:  Optional[str] = None
-    rut_cirujano:     Optional[str] = None
     nombre_clinica:   Optional[str] = None
     ciudad_clinica:   Optional[str] = None
     region_clinica:   Optional[str] = None
+    nombre_cirujano:  Optional[str] = None
+    marca_implante:   Optional[str] = None
+    fijacion:         Optional[str] = None
+    alineacion:       Optional[str] = None
+    robotica:         Optional[str] = None
+    cotilo:           Optional[str] = None
+    vastago:          Optional[str] = None
+    modelo_implante:  Optional[str] = None
     prevision:        Optional[str] = None
     notas:            Optional[str] = None
-
 
 # ============================================================
 # ENDPOINTS
@@ -173,89 +178,90 @@ class CirugiaUpdatePayload(BaseModel):
 
 @router.get("/catalogo")
 def get_catalogo():
-    """Devuelve los catálogos para poblar los selects del frontend."""
     return {
         "tipos_protesis":      TIPOS_PROTESIS,
         "lados":               LADOS,
         "abordajes_cadera":    ABORDAJES_CADERA,
-        "fijaciones":          FIJACIONES,
+        "fijaciones_cadera":   FIJACIONES_CADERA,
+        "alineaciones_rodilla": ALINEACIONES_RODILLA,
         "indicaciones":        INDICACIONES,
         "previsiones":         PREVISIONES,
+        "marcas":              MARCAS,
+        "robotica":            ROBOTICA,
     }
 
 
 @router.get("")
 def listar_cirugias(rut: str = Depends(get_rut_from_token)):
-    """Lista todas las cirugías registradas del paciente."""
     return _list_surgeries(rut)
 
 
 @router.post("")
 def crear_cirugia(
     payload: CirugiaPayload,
-    rut: str = Depends(get_rut_from_token)
+    rut:     str = Depends(get_rut_from_token)
 ):
-    """Paciente registra una nueva cirugía."""
     _ensure_dirs(rut)
-
     cirugia_id = str(uuid.uuid4())[:8]
     now        = datetime.now(timezone.utc).isoformat()
+    es_cadera  = "cadera" in payload.tipo_protesis.lower()
 
     data = {
-        "id":               cirugia_id,
-        "rut":              rut,
-        "fecha_cirugia":    payload.fecha_cirugia,
-        "tipo_protesis":    payload.tipo_protesis,
-        "lado":             payload.lado,
-        "indicacion":       payload.indicacion,
-        "abordaje":         payload.abordaje or "",
+        "id":            cirugia_id,
+        "rut":           rut,
+        "fecha_cirugia": payload.fecha_cirugia,
+        "tipo_protesis": payload.tipo_protesis,
+        "lado":          payload.lado,
+        "indicacion":    payload.indicacion,
 
-        "implante": {
-            "marca":        payload.marca_implante or "",
-            "modelo":       payload.modelo_implante or "",
-            "fijacion":     payload.fijacion or "",
-            "numero_serie": payload.numero_serie or "",
+        "clinica": {
+            "nombre": payload.nombre_clinica,
+            "ciudad": payload.ciudad_clinica,
+            "region": payload.region_clinica or "",
         },
 
         "cirujano": {
-            "nombre":       payload.nombre_cirujano,
-            "rut":          payload.rut_cirujano or "",
-            "especialidad": payload.especialidad_cirujano or "Traumatología",
+            "nombre": payload.nombre_cirujano,
+            "rut":    payload.rut_cirujano or "",
         },
 
-        "clinica": {
-            "nombre":  payload.nombre_clinica,
-            "ciudad":  payload.ciudad_clinica,
-            "region":  payload.region_clinica or "",
+        "implante": {
+            "marca":    payload.marca_implante or "",
+            "robotica": payload.robotica or "",
+            # cadera
+            "cotilo":    payload.cotilo   or "",
+            "vastago":   payload.vastago  or "",
+            "fijacion":  payload.fijacion or "",
+            "abordaje":  payload.abordaje or "",
+            # rodilla
+            "modelo":    payload.modelo_implante or "",
+            "alineacion": payload.alineacion or "",
         },
 
-        "prevision":    payload.prevision or "",
-        "notas":        payload.notas or "",
-        "created_at":   now,
-        "updated_at":   now,
+        "prevision":  payload.prevision or "",
+        "notas":      payload.notas or "",
+        "created_at": now,
+        "updated_at": now,
 
-        # Seguimiento de escalas — se actualizan automáticamente
         "escalas_programadas": {
-            "preop":   {"programada": True,  "completada": False, "fecha_envio": None},
-            "3m":      {"programada": True,  "completada": False, "fecha_envio": None},
-            "6m":      {"programada": True,  "completada": False, "fecha_envio": None},
-            "1a":      {"programada": True,  "completada": False, "fecha_envio": None},
-            "2a":      {"programada": True,  "completada": False, "fecha_envio": None},
+            "preop": {"programada": True, "completada": False, "fecha_envio": None},
+            "3m":    {"programada": True, "completada": False, "fecha_envio": None},
+            "6m":    {"programada": True, "completada": False, "fecha_envio": None},
+            "1a":    {"programada": True, "completada": False, "fecha_envio": None},
+            "2a":    {"programada": True, "completada": False, "fecha_envio": None},
         }
     }
 
     path = _surgeries_dir(rut) / f"{cirugia_id}.json"
     _write_json(path, data)
-
     return {"ok": True, "id": cirugia_id, "data": data}
 
 
 @router.get("/{cirugia_id}")
 def get_cirugia(
     cirugia_id: str,
-    rut: str = Depends(get_rut_from_token)
+    rut:        str = Depends(get_rut_from_token)
 ):
-    """Obtiene una cirugía específica del paciente."""
     path = _surgeries_dir(rut) / f"{cirugia_id}.json"
     if not path.exists():
         raise HTTPException(status_code=404, detail="Cirugía no encontrada")
@@ -268,7 +274,6 @@ def actualizar_cirugia(
     payload:    CirugiaUpdatePayload,
     rut:        str = Depends(get_rut_from_token)
 ):
-    """Paciente edita datos de su cirugía."""
     path = _surgeries_dir(rut) / f"{cirugia_id}.json"
     if not path.exists():
         raise HTTPException(status_code=404, detail="Cirugía no encontrada")
@@ -277,37 +282,23 @@ def actualizar_cirugia(
     updates = payload.dict(exclude_none=True)
     now     = datetime.now(timezone.utc).isoformat()
 
-    # Campos planos
-    for field in ["fecha_cirugia", "tipo_protesis", "lado", "indicacion",
-                  "abordaje", "prevision", "notas"]:
+    for field in ["fecha_cirugia", "tipo_protesis", "lado", "indicacion", "prevision", "notas"]:
         if field in updates:
             data[field] = updates[field]
 
-    # Implante
-    for field in ["marca_implante", "modelo_implante", "fijacion", "numero_serie"]:
-        key = field.replace("_implante", "").replace("numero_serie", "numero_serie")
+    if "nombre_clinica"  in updates: data["clinica"]["nombre"]  = updates["nombre_clinica"]
+    if "ciudad_clinica"  in updates: data["clinica"]["ciudad"]  = updates["ciudad_clinica"]
+    if "region_clinica"  in updates: data["clinica"]["region"]  = updates["region_clinica"]
+    if "nombre_cirujano" in updates: data["cirujano"]["nombre"] = updates["nombre_cirujano"]
+
+    implante_fields = ["marca_implante", "fijacion", "alineacion", "robotica", "cotilo", "vastago", "modelo_implante", "abordaje"]
+    implante_keys   = {"marca_implante": "marca", "modelo_implante": "modelo"}
+    for field in implante_fields:
         if field in updates:
-            mapped = field.replace("_implante", "")
-            if field == "numero_serie":
-                data["implante"]["numero_serie"] = updates[field]
-            else:
-                data["implante"][mapped] = updates[field]
-
-    # Cirujano
-    if "nombre_cirujano" in updates:
-        data["cirujano"]["nombre"] = updates["nombre_cirujano"]
-    if "rut_cirujano" in updates:
-        data["cirujano"]["rut"] = updates["rut_cirujano"]
-
-    # Clínica
-    if "nombre_clinica" in updates:
-        data["clinica"]["nombre"] = updates["nombre_clinica"]
-    if "ciudad_clinica" in updates:
-        data["clinica"]["ciudad"] = updates["ciudad_clinica"]
-    if "region_clinica" in updates:
-        data["clinica"]["region"] = updates["region_clinica"]
+            key = implante_keys.get(field, field)
+            data["implante"][key] = updates[field]
 
     data["updated_at"] = now
     _write_json(path, data)
-
     return {"ok": True, "data": data}
+    
