@@ -1,4 +1,8 @@
 # modules/rut_utils.py
+"""
+Validación de RUT chileno — canónica.
+Usado por todos los routers del Registro Nacional de Prótesis.
+"""
 
 import re
 
@@ -15,6 +19,8 @@ def normalize_rut(rut: str) -> str:
 
 def is_valid_rut_format(rut: str) -> bool:
     """Valida solo formato (sin calcular DV)."""
+    if not rut:
+        return False
     return bool(re.match(r"^\d{7,8}-[\dK]$", rut))
 
 
