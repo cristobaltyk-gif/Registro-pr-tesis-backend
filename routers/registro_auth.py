@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import secrets
 import string
 from datetime import datetime, timedelta, timezone
@@ -13,6 +12,8 @@ from pathlib import Path
 import jwt
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
+
+from modules.rut_utils import normalize_rut, is_valid_rut
 
 router = APIRouter(prefix="/api/registro/auth", tags=["registro-auth"])
 
@@ -29,17 +30,6 @@ ADMIN_KEY   = os.getenv("REGISTRO_ADMIN_KEY", "admin_registro_ica")
 # ============================================================
 # HELPERS
 # ============================================================
-def _normalize_rut(rut: str) -> str:
-    rut = rut.strip().upper().replace(".", "").replace(" ", "")
-    if "-" not in rut and len(rut) > 1:
-        rut = f"{rut[:-1]}-{rut[-1]}"
-    return rut
-
-
-def _valid_rut(rut: str) -> bool:
-    return bool(re.match(r"^\d{7,8}-[\dK]$", rut))
-
-
 def _load_codes() -> dict:
     if not CODES_FILE.exists():
         return {}
@@ -111,11 +101,10 @@ def ingresar(payload: IngresarRequest):
     """
     Paciente ingresa solo con su RUT — sin código.
     Genera token JWT directamente.
-    Primera etapa: acceso abierto para registro inicial.
     """
-    rut = _normalize_rut(payload.rut)
-    if not _valid_rut(rut):
-        raise HTTPException(status_code=400, detail="RUT inválido. Formato esperado: 12345678-9")
+    rut = normalize_rut(payload.rut)
+    if not is_valid_rut(rut):
+        raise HTTPException(status_code=400, detail="RUT inválido. Verifique su RUT y dígito verificador.")
 
     token = _create_token(rut)
     return {"ok": True, "rut": rut, "token": token}
@@ -136,8 +125,8 @@ def generar_codigo(payload: GenerarCodigoRequest):
     if payload.admin_key != ADMIN_KEY:
         raise HTTPException(status_code=403, detail="Clave de admin inválida")
 
-    rut = _normalize_rut(payload.rut)
-    if not _valid_rut(rut):
+    rut = normalize_rut(payload.rut)
+    if not is_valid_rut(rut):
         raise HTTPException(status_code=400, detail="RUT inválido")
 
     codes    = _load_codes()
@@ -160,8 +149,8 @@ def generar_codigo(payload: GenerarCodigoRequest):
 @router.post("/validar")
 def validar_codigo(payload: ValidarCodigoRequest):
     """Paciente valida RUT + código → devuelve token JWT."""
-    rut = _normalize_rut(payload.rut)
-    if not _valid_rut(rut):
+    rut = normalize_rut(payload.rut)
+    if not is_valid_rut(rut):
         raise HTTPException(status_code=400, detail="RUT inválido")
 
     codes = _load_codes()
@@ -194,8 +183,8 @@ def generar_batch(payload: list[GenerarCodigoRequest]):
     results = []
 
     for item in payload:
-        rut = _normalize_rut(item.rut)
-        if not _valid_rut(rut):
+        rut = normalize_rut(item.rut)
+        if not is_valid_rut(rut):
             results.append({"rut": rut, "ok": False, "error": "RUT inválido"})
             continue
         existing = codes.get(rut)
@@ -214,4 +203,3 @@ def generar_batch(payload: list[GenerarCodigoRequest]):
 
     _save_codes(codes)
     return {"ok": True, "total": len(results), "results": results}
-    
