@@ -427,4 +427,183 @@ def _calcular_score(escala_key: str, respuestas: dict) -> dict:
         for seccion in escala["secciones"]:
             for preg in seccion["preguntas"]:
                 total += int(respuestas.get(preg["id"], 0))
-        
+    else:
+        for preg in escala["preguntas"]:
+            total += int(respuestas.get(preg["id"], 0))
+
+    # Buscar interpretación
+    interpretacion = ""
+    for rango in escala.get("interpretacion", []):
+        if rango["min"] <= total <= rango["max"]:
+            interpretacion = rango["texto"]
+            break
+
+    return {
+        "score":          total,
+        "score_max":      escala["score_max"],
+        "interpretacion": interpretacion,
+    }
+
+
+# ============================================================
+# SCHEMAS
+# ============================================================
+class EscalaPayload(BaseModel):
+    escala:     str            # "harris_hip" | "oxford_knee" | "womac"
+    respuestas: Dict[str, Any]
+
+
+# ============================================================
+# ENDPOINTS
+# ============================================================
+
+@router.get("/catalogo")
+def get_catalogo_escalas():
+    """Retorna las definiciones completas de todas las escalas."""
+    return ESCALAS
+
+
+@router.get("/disponibles/{cirugia_id}")
+def escalas_disponibles(
+    cirugia_id: str,
+    rut:        str = Depends(get_rut_from_token),
+):
+    """Retorna las escalas aplicables a una cirugía específica."""
+    cirugia = _get_surgery(rut, cirugia_id)
+    tipo    = cirugia.get("tipo_protesis", "")
+    keys    = _escalas_para_tipo(tipo)
+    return {
+        "cirugia_id":    cirugia_id,
+        "tipo_protesis": tipo,
+        "escalas":       [
+            {
+                "key":         k,
+                "nombre":      ESCALAS[k]["nombre"],
+                "descripcion": ESCALAS[k].get("descripcion", ""),
+            }
+            for k in keys
+        ],
+    }
+
+
+@router.post("/{cirugia_id}/{periodo}")
+def guardar_escala(
+    cirugia_id: str,
+    periodo:    str,
+    payload:    EscalaPayload,
+    rut:        str = Depends(get_rut_from_token),
+):
+    """
+    Guarda las respuestas de una escala para una cirugía+periodo.
+    Calcula el score y marca la escala como completada.
+    """
+    # Validar período
+    if periodo not in PERIODOS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Período inválido. Debe ser uno de: {', '.join(PERIODOS)}"
+        )
+
+    # Validar escala
+    if payload.escala not in ESCALAS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Escala desconocida: {payload.escala}"
+        )
+
+    # Validar que la cirugía exista
+    cirugia = _get_surgery(rut, cirugia_id)
+
+    # Calcular score
+    resultado = _calcular_score(payload.escala, payload.respuestas)
+
+    # Guardar archivo de respuestas
+    now  = datetime.now(timezone.utc).isoformat()
+    data = {
+        "rut":            rut,
+        "cirugia_id":     cirugia_id,
+        "periodo":        periodo,
+        "escala":         payload.escala,
+        "escala_nombre":  ESCALAS[payload.escala]["nombre"],
+        "respuestas":     payload.respuestas,
+        "score":          resultado["score"],
+        "score_max":      resultado["score_max"],
+        "interpretacion": resultado["interpretacion"],
+        "completada_at":  now,
+    }
+
+    scale_path = _scale_path(rut, cirugia_id, periodo)
+    # Si ya existía una escala previa para este periodo, la sobrescribimos
+    # (esto permite "reabrir" y volver a contestar)
+    existing = []
+    if scale_path.exists():
+        try:
+            prev = json.loads(scale_path.read_text(encoding="utf-8"))
+            if isinstance(prev, dict) and "escalas" in prev:
+                existing = prev["escalas"]
+        except Exception:
+            pass
+
+    # Eliminar escala previa del mismo tipo (si existía) y agregar la nueva
+    existing = [e for e in existing if e.get("escala") != payload.escala]
+    existing.append(data)
+
+    final_doc = {
+        "rut":          rut,
+        "cirugia_id":   cirugia_id,
+        "periodo":      periodo,
+        "escalas":      existing,
+        "updated_at":   now,
+    }
+
+    try:
+        scale_path.write_text(
+            json.dumps(final_doc, indent=2, ensure_ascii=False),
+            encoding="utf-8"
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error guardando escala: {e}")
+
+    # Marcar la escala como completada en el archivo de cirugía
+    surgery_path = _surgery_path(rut, cirugia_id)
+    cirugia.setdefault("escalas_programadas", {}).setdefault(periodo, {})
+    cirugia["escalas_programadas"][periodo]["completada"]    = True
+    cirugia["escalas_programadas"][periodo]["completada_at"] = now
+    cirugia["updated_at"] = now
+
+    try:
+        surgery_path.write_text(
+            json.dumps(cirugia, indent=2, ensure_ascii=False),
+            encoding="utf-8"
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error actualizando cirugía: {e}")
+
+    return {
+        "ok":             True,
+        "score":          resultado["score"],
+        "score_max":      resultado["score_max"],
+        "interpretacion": resultado["interpretacion"],
+        "escala_nombre":  ESCALAS[payload.escala]["nombre"],
+        "periodo":        periodo,
+    }
+
+
+@router.get("/{cirugia_id}")
+def listar_escalas_cirugia(
+    cirugia_id: str,
+    rut:        str = Depends(get_rut_from_token),
+):
+    """
+    Lista todas las escalas completadas para una cirugía.
+    Útil para la vista detalle / historial.
+    """
+    # Validar que la cirugía exista
+    _get_surgery(rut, cirugia_id)
+
+    scales_dir = _scales_dir(rut)
+    resultado  = {}
+
+    for f in sorted(scales_dir.glob(f"{cirugia_id}_*.json")):
+        try:
+            doc = j
