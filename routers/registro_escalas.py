@@ -34,16 +34,12 @@ PERIODOS = ["preop", "3m", "6m", "1a", "2a"]
 
 # ============================================================
 # DEFINICIÓN DE ESCALAS
-# Cada pregunta tiene texto adaptado al paciente y opciones.
-# score_map mapea la respuesta a puntaje numérico.
 # ============================================================
 
 ESCALAS: Dict[str, Any] = {
 
     # ──────────────────────────────────────────────────────
     # HARRIS HIP SCORE — adaptado para paciente
-    # Aplica a: cadera total, cadera parcial
-    # Puntaje: 0-100 (mayor = mejor)
     # ──────────────────────────────────────────────────────
     "harris_hip": {
         "nombre":      "Harris Hip Score",
@@ -151,8 +147,6 @@ ESCALAS: Dict[str, Any] = {
 
     # ──────────────────────────────────────────────────────
     # OXFORD KNEE SCORE — adaptado para paciente
-    # Aplica a: rodilla total, unicompartimental
-    # 12 preguntas, cada una 0-4, total 0-48 (mayor = mejor)
     # ──────────────────────────────────────────────────────
     "oxford_knee": {
         "nombre":      "Oxford Knee Score",
@@ -256,7 +250,7 @@ ESCALAS: Dict[str, Any] = {
                 ],
             },
             {
-                "id":    "trabajo_doméstico",
+                "id":    "trabajo_domestico",
                 "texto": "¿Qué tan limitado está para hacer actividades domésticas?",
                 "tipo":  "opcion",
                 "opciones": [
@@ -312,13 +306,8 @@ ESCALAS: Dict[str, Any] = {
             {"min": 20, "max": 26, "texto": "Malo — problemas severos"},
             {"min": 0,  "max": 19, "texto": "Muy malo — problemas muy severos"},
         ],
-    },
-
-    # ──────────────────────────────────────────────────────
+    },# ──────────────────────────────────────────────────────
     # WOMAC — versión simplificada para paciente
-    # Aplica a: cadera y rodilla
-    # 24 preguntas, escala 0-4, mayor = peor
-    # Normalizamos a 0-100 (mayor = mejor) para consistencia
     # ──────────────────────────────────────────────────────
     "womac": {
         "nombre":      "WOMAC",
@@ -377,7 +366,7 @@ ESCALAS: Dict[str, Any] = {
             {"texto": "Mucho/a",      "valor": 3},
             {"texto": "Muchísimo/a",  "valor": 4},
         ],
-        "score_max": 96,   # 24 preguntas × 4 máx
+        "score_max": 96,
         "interpretacion": [
             {"min": 0,  "max": 20,  "texto": "Función muy buena"},
             {"min": 21, "max": 40,  "texto": "Función buena"},
@@ -397,17 +386,21 @@ def _scales_dir(rut: str) -> Path:
     p.mkdir(parents=True, exist_ok=True)
     return p
 
+
 def _surgery_path(rut: str, cirugia_id: str) -> Path:
     return PATIENTS_DIR / rut / "surgeries" / f"{cirugia_id}.json"
 
+
 def _scale_path(rut: str, cirugia_id: str, periodo: str) -> Path:
     return _scales_dir(rut) / f"{cirugia_id}_{periodo}.json"
+
 
 def _get_surgery(rut: str, cirugia_id: str) -> dict:
     path = _surgery_path(rut, cirugia_id)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Cirugía no encontrada")
     return json.loads(path.read_text(encoding="utf-8"))
+
 
 def _escalas_para_tipo(tipo_protesis: str) -> list[str]:
     """Retorna las escalas aplicables según el tipo de prótesis."""
@@ -417,6 +410,7 @@ def _escalas_para_tipo(tipo_protesis: str) -> list[str]:
         if tipo_protesis in aplica:
             resultado.append(key)
     return resultado
+
 
 def _calcular_score(escala_key: str, respuestas: dict) -> dict:
     """Calcula el puntaje total y la interpretación."""
@@ -431,7 +425,6 @@ def _calcular_score(escala_key: str, respuestas: dict) -> dict:
         for preg in escala["preguntas"]:
             total += int(respuestas.get(preg["id"], 0))
 
-    # Buscar interpretación
     interpretacion = ""
     for rango in escala.get("interpretacion", []):
         if rango["min"] <= total <= rango["max"]:
@@ -449,7 +442,7 @@ def _calcular_score(escala_key: str, respuestas: dict) -> dict:
 # SCHEMAS
 # ============================================================
 class EscalaPayload(BaseModel):
-    escala:     str            # "harris_hip" | "oxford_knee" | "womac"
+    escala:     str
     respuestas: Dict[str, Any]
 
 
@@ -497,27 +490,21 @@ def guardar_escala(
     Guarda las respuestas de una escala para una cirugía+periodo.
     Calcula el score y marca la escala como completada.
     """
-    # Validar período
     if periodo not in PERIODOS:
         raise HTTPException(
             status_code=400,
             detail=f"Período inválido. Debe ser uno de: {', '.join(PERIODOS)}"
         )
 
-    # Validar escala
     if payload.escala not in ESCALAS:
         raise HTTPException(
             status_code=400,
             detail=f"Escala desconocida: {payload.escala}"
         )
 
-    # Validar que la cirugía exista
-    cirugia = _get_surgery(rut, cirugia_id)
-
-    # Calcular score
+    cirugia   = _get_surgery(rut, cirugia_id)
     resultado = _calcular_score(payload.escala, payload.respuestas)
 
-    # Guardar archivo de respuestas
     now  = datetime.now(timezone.utc).isoformat()
     data = {
         "rut":            rut,
@@ -533,27 +520,24 @@ def guardar_escala(
     }
 
     scale_path = _scale_path(rut, cirugia_id, periodo)
-    # Si ya existía una escala previa para este periodo, la sobrescribimos
-    # (esto permite "reabrir" y volver a contestar)
-    existing = []
+    existing   = []
     if scale_path.exists():
         try:
             prev = json.loads(scale_path.read_text(encoding="utf-8"))
             if isinstance(prev, dict) and "escalas" in prev:
                 existing = prev["escalas"]
         except Exception:
-            pass
+            existing = []
 
-    # Eliminar escala previa del mismo tipo (si existía) y agregar la nueva
     existing = [e for e in existing if e.get("escala") != payload.escala]
     existing.append(data)
 
     final_doc = {
-        "rut":          rut,
-        "cirugia_id":   cirugia_id,
-        "periodo":      periodo,
-        "escalas":      existing,
-        "updated_at":   now,
+        "rut":        rut,
+        "cirugia_id": cirugia_id,
+        "periodo":    periodo,
+        "escalas":    existing,
+        "updated_at": now,
     }
 
     try:
@@ -594,11 +578,7 @@ def listar_escalas_cirugia(
     cirugia_id: str,
     rut:        str = Depends(get_rut_from_token),
 ):
-    """
-    Lista todas las escalas completadas para una cirugía.
-    Útil para la vista detalle / historial.
-    """
-    # Validar que la cirugía exista
+    """Lista todas las escalas completadas para una cirugía."""
     _get_surgery(rut, cirugia_id)
 
     scales_dir = _scales_dir(rut)
@@ -606,7 +586,7 @@ def listar_escalas_cirugia(
 
     for f in sorted(scales_dir.glob(f"{cirugia_id}_*.json")):
         try:
-doc = json.loads(f.read_text(encoding="utf-8"))
+            doc = json.loads(f.read_text(encoding="utf-8"))
             periodo = doc.get("periodo", f.stem.split("_")[-1])
             resultado[periodo] = doc
         except Exception:
@@ -628,7 +608,6 @@ def get_escala_periodo(
     if periodo not in PERIODOS:
         raise HTTPException(status_code=400, detail="Período inválido")
 
-    # Validar ownership
     _get_surgery(rut, cirugia_id)
 
     scale_path = _scale_path(rut, cirugia_id, periodo)
