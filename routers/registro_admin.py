@@ -1,27 +1,18 @@
+# routers/registro_admin.py
+
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from pathlib import Path
 from datetime import datetime
 import json
 import os
-import re
 
 from routers.registro_auth import get_rut_from_token
+from modules.rut_utils import normalize_rut, is_valid_rut
 
 router = APIRouter(prefix="/api/registro/admin", tags=["registro-admin"])
 
 BASE_DIR = Path(os.getenv("DATA_PATH", "/data")) / "registro_protesis" / "patients"
-
-
-def normalize_rut(rut: str) -> str:
-    rut = rut.strip().upper().replace(".", "").replace(" ", "")
-    if "-" not in rut and len(rut) > 1:
-        rut = f"{rut[:-1]}-{rut[-1]}"
-    return rut
-
-
-def is_valid_rut_format(rut: str) -> bool:
-    return bool(re.match(r"^\d{7,8}-[\dK]$", rut))
 
 
 def patient_dir(rut: str) -> Path:
@@ -54,16 +45,16 @@ def write_json(path: Path, data: dict):
 
 
 class PatientAdminPayload(BaseModel):
-    rut: str
-    nombre: str
-    apellido_paterno: str
-    apellido_materno: str = ""
-    fecha_nacimiento: str
-    direccion: str = ""
-    telefono: str = ""
-    email: str = ""
-    prevision: str = ""
-    sexo: str = ""
+    rut:               str
+    nombre:            str
+    apellido_paterno:  str
+    apellido_materno:  str = ""
+    fecha_nacimiento:  str
+    direccion:         str = ""
+    telefono:          str = ""
+    email:             str = ""
+    prevision:         str = ""
+    sexo:              str = ""
 
 
 @router.get("/{rut}")
@@ -72,7 +63,7 @@ def get_patient_admin(
     token_rut: str = Depends(get_rut_from_token)
 ):
     rut = normalize_rut(rut)
-    if not is_valid_rut_format(rut):
+    if not is_valid_rut(rut):
         raise HTTPException(status_code=400, detail="RUT inválido")
 
     path = admin_file(rut)
@@ -88,7 +79,7 @@ def create_patient_admin(
     token_rut: str = Depends(get_rut_from_token)
 ):
     rut = normalize_rut(payload.rut)
-    if not is_valid_rut_format(rut):
+    if not is_valid_rut(rut):
         raise HTTPException(status_code=400, detail="RUT inválido")
 
     path = admin_file(rut)
@@ -126,7 +117,7 @@ def update_patient_admin(
     token_rut: str = Depends(get_rut_from_token)
 ):
     rut = normalize_rut(rut)
-    if not is_valid_rut_format(rut):
+    if not is_valid_rut(rut):
         raise HTTPException(status_code=400, detail="RUT inválido")
 
     path = admin_file(rut)
@@ -154,4 +145,3 @@ def update_patient_admin(
 
     write_json(path, updated)
     return {"ok": True, "rut": rut}
-    
