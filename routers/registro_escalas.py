@@ -606,7 +606,7 @@ def listar_escalas_cirugia(
 
     for f in sorted(scales_dir.glob(f"{cirugia_id}_*.json")):
         try:
-            doc = json.loads(f.read_text(encoding="utf-8"))
+doc = json.loads(f.read_text(encoding="utf-8"))
             periodo = doc.get("periodo", f.stem.split("_")[-1])
             resultado[periodo] = doc
         except Exception:
