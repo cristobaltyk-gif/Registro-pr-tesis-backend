@@ -606,4 +606,33 @@ def listar_escalas_cirugia(
 
     for f in sorted(scales_dir.glob(f"{cirugia_id}_*.json")):
         try:
-            doc = j
+            doc = json.loads(f.read_text(encoding="utf-8"))
+            periodo = doc.get("periodo", f.stem.split("_")[-1])
+            resultado[periodo] = doc
+        except Exception:
+            continue
+
+    return {
+        "cirugia_id": cirugia_id,
+        "escalas":    resultado,
+    }
+
+
+@router.get("/{cirugia_id}/{periodo}")
+def get_escala_periodo(
+    cirugia_id: str,
+    periodo:    str,
+    rut:        str = Depends(get_rut_from_token),
+):
+    """Retorna la escala completada para un período específico."""
+    if periodo not in PERIODOS:
+        raise HTTPException(status_code=400, detail="Período inválido")
+
+    # Validar ownership
+    _get_surgery(rut, cirugia_id)
+
+    scale_path = _scale_path(rut, cirugia_id, periodo)
+    if not scale_path.exists():
+        raise HTTPException(status_code=404, detail="Escala no completada en este período")
+
+    return json.loads(scale_path.read_text(encoding="utf-8"))
